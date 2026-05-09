@@ -1,5 +1,7 @@
 # src/data.py
-import torch 
+import torch
+
+from jaxtyping import Long
 
 
 def load_corpus() -> str:
@@ -19,7 +21,7 @@ class Tokenizer:
     def decode(self, tokens: list[int]) -> str:
         return "".join([self.vocab[t] for t in tokens])
 
-    def encode_to_tensor(self, text: str) -> torch.LongTensor:
+    def encode_to_tensor(self, text: str) -> Long[torch.Tensor, "L"]:
         return torch.tensor(self.encode(text), dtype=torch.long)
 
 
