@@ -1,7 +1,7 @@
 # src/data.py
 import torch
 
-from jaxtyping import Long
+from jaxtyping import Int64
 
 
 def load_corpus() -> str:
@@ -21,12 +21,33 @@ class Tokenizer:
     def decode(self, tokens: list[int]) -> str:
         return "".join([self.vocab[t] for t in tokens])
 
-    def encode_to_tensor(self, text: str) -> Long[torch.Tensor, "L"]:
+    def encode_to_tensor(self, text: str) -> Int64[torch.Tensor, "L"]:
         return torch.tensor(self.encode(text), dtype=torch.long)
+
+class TokenizedDataset:
+    def __init__(self, encoded: Int64[torch.Tensor, "L"]) -> None:
+        self.encoded = encoded
+
+    def get_batch(self, B: int, T: int) -> tuple[Int64[torch.Tensor, "B T"], Int64[torch.Tensor, "B T"]]:
+        L = len(self.encoded)
+        offsets = torch.randint(0, L-T, (B,))
+        idx = offsets[:, None] + torch.arange(T)[None, :]
+        x = self.encoded[idx]
+        y = self.encoded[idx+1]
+        return x, y
+
+
+
+
+
 
 
 if __name__ == '__main__':
+    
+    torch.manual_seed(42)
+
     text = load_corpus()
     tok = Tokenizer(text)
+    ds = TokenizedDataset(tok.encode_to_tensor(text))
 
-    print(tok.encode_to_tensor(text[:80]))
+    print(ds.get_batch(B=2, T=4))
