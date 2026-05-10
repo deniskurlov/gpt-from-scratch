@@ -1,0 +1,70 @@
+# Stage 1: Data loading and character-level tokenization
+
+## Summary
+
+This stage built the data plumbing for character-level language modeling on tiny-shakespeare: load the raw corpus from disk, derive a deterministic vocabulary from its unique characters, encode the full corpus into a 1-D `int64` tensor, and sample `(B, T)`-shaped batches with a target tensor `y` aligned by a shift of one position. Every downstream stage depends on this pipeline — every forward pass through the transformer starts from `(x, y) = dataset.get_batch(B, T)`. The substantive content is mostly *what isn't here yet*: there is no embedding layer and no positional information; the `(B, T)` integer tensor that comes out of `get_batch` is the canonical raw input that stage 2's `nn.Embedding(V, d_model)` will consume to produce the `(B, T, d_model)` float tensor that the rest of the model operates on. The shift-by-1 alignment in `y` is the single algorithmic ingredient that turns one forward pass on `(B, T)` into `B·T` parallel next-token-prediction training examples — a property that becomes operationally honest once stage 3 introduces the causal mask.
+
+## The math
+
+**Embedding equivalence.** The integer-indexed embedding lookup `nn.Embedding(V, d_model)(i)` is mathematically equivalent to a matrix multiplication `e_i^T · W`, where `e_i ∈ R^V` is a one-hot vector with `1` at position `i` and `0` elsewhere, and `W ∈ R^{V × d_model}` is the embedding matrix. Both produce the *i*-th row of `W`. Reasons indexed lookup is universal in practice:
+
+- **FLOPs**: `O(V · d_model · B · T)` for the matmul vs `O(d_model · B · T)` for the lookup — factor-of-V speedup. For GPT-2 (V ≈ 50,000), that's ~50,000× per token.
+- **Memory**: the materialized one-hot batch tensor is `(B, T, V)`. For `B=64, T=256, V=50000` at fp32: ~3.3 GB just for the input. The integer-ID alternative `(B, T)` int64 is ~128 KB. Factor of ~25,000.
+
+**Offset bound for `get_batch`.** For corpus length `L` and context length `T`, valid offsets `i` satisfy `0 ≤ i ≤ L - T - 1`. The binding constraint comes from `y = encoded[i+1 : i+T+1]`: the rightmost index it reads is `i + T`, so `i + T ≤ L - 1`. Translating to the half-open `torch.randint(low, high, ...)` API (high exclusive): `torch.randint(0, L - T, (B,))` produces values in `[0, L - T - 1]` inclusive — exactly the valid range. The `x` slice's constraint (`i + T ≤ L`, i.e., `i ≤ L - T`) is *less* restrictive than `y`'s, so it's `y`'s bound that determines the maximum offset.
+
+## The code
+
+- `src/data.py:7` — `load_corpus()`: opens `data/input.txt` with `encoding='utf-8'`, returns the corpus as a Python `str` of length L.
+- `src/data.py:11` — `Tokenizer`: builds `vocab` (sorted list of unique chars), `vocab_size`, and `stoi` (char→int dict) from a corpus. Methods: `encode(str) → list[int]`, `decode(list[int]) → str`, `encode_to_tensor(str) → Int64[Tensor, "L"]`.
+- `src/data.py:27` — `TokenizedDataset`: holds an encoded `(L,)` int64 tensor, exposes `get_batch(B, T) → (x, y)` with both shape `(B, T)` int64.
+- `tests/test_data.py` — 7 pytest cases: tokenizer round-trip, vocab size, vocab content, batch shape, batch dtype, batch range (both `x` and `y` in `[0, V)`), shift-by-1 invariant.
+- `notes/stage_1_tokenization_concepts.md` — conceptual notes from the probe phase.
+
+## Design choices and why
+
+- **`sorted(set(corpus))` for the vocab.** Python uses hash randomization for strings, so `set` iteration order is non-deterministic across separate Python invocations. Without sorting, the same character maps to a different integer in different runs — a saved model and its reloaded vocab would disagree silently, and embeddings learned for index 5 in one run would be associated with a different character on reload.
+- **`Tokenizer` is a tokenizer, `TokenizedDataset` is a tokenized dataset.** Two separate classes for two separate responsibilities: the tokenizer carries encoding/decoding logic and is reusable across any text (training corpus, eventual validation set, prompts at inference); the dataset holds an encoded tensor and samples from it. To compose: `TokenizedDataset(tokenizer.encode_to_tensor(text))`. The alternative — Tokenizer storing the encoded corpus internally — would couple the tokenizer to a single text and force a separate object anyway when handling validation/prompts.
+- **`TokenizedDataset.__init__` takes an encoded tensor, not raw text + tokenizer.** Dependency injection. Caller wires the pieces explicitly, which keeps the dataset's responsibility narrow ("hold a tensor, sample batches") and makes it testable with a synthetic 100-element tensor — no tokenizer construction in the test.
+- **`encode_to_tensor` is a method called on demand, not eager in `__init__`.** Lazy encoding lets the same tokenizer encode the training corpus, validation corpus, and inference prompts without storing extras. Eager encoding would conflate "tokenizer" with "tokenized data".
+- **`itos` is the vocab list itself, not a separate dict.** Decoding is `self.vocab[i]` — array indexing, O(1). A separate `itos: dict[int, str]` would be functionally identical but slightly more memory and slightly less cache-friendly. The asymmetry is intentional: encoding (str → int) needs a hash map (str isn't an array index); decoding (int → str) needs an array (int *is* an array index, no hash needed).
+- **`torch.randint(0, L - T, (B,))`, with replacement.** Sampling with replacement is harmless — duplicate offsets in a batch just give the same window twice, no correctness issue, and most LM training does this. The half-open `[low, high)` convention is universal across `range`, slicing, and `torch.arange`; the call-site value is `inclusive_max + 1`.
+- **Vectorized index construction via broadcasting.** `idx = offsets[:, None] + torch.arange(T)[None, :]` builds the entire `(B, T)` index tensor in one tensor op. The same `[:, None] / [None, :]` broadcast pattern recurs in attention masks (stage 3), RoPE rotation indices (stage 13), and KV-cache lookups. Front-loading the pattern here pays off across the rest of the project.
+- **`get_batch` returns `(x, y)` with `y = encoded[idx + 1]`.** Single shift in indexing produces the next-token target tensor of the same shape. The supervision relationship `y[k, j] = x[k, j+1]` for `j ∈ [0, T-2]` (with `y[k, T-1]` being a "novel" target absent from `x`) is what yields `B · T` parallel training examples per forward pass. Stage 3's causal mask is what makes those examples honest rather than a copy task.
+- **CPU is the home device for the encoded corpus.** Keeping the full `(L,)` corpus on CPU and moving only `(B, T)` batches to MPS at training time avoids pre-allocating accelerator memory you don't yet need. The per-step copy is cheap (B·T = 16K ints ≈ 128 KB).
+- **jaxtyping annotations (`Int64[Tensor, "L"]`, `Int64[Tensor, "B T"]`).** Adopted to make shape and dtype visible at function boundaries. The shape DSL ("L", "B T") generates static-checker warnings (`"L" not defined`) that are safely ignorable; runtime usage works without `@jaxtyped(typechecker=beartype)` runtime checks for now.
+
+## Errors and corrections
+
+- **Conflated corpus length `L` with vocab size `V`.** Used the same letter for both in the data-pipeline chain. Numerically these differ by ~four orders of magnitude (1.1M vs 65); confusing them in code or comments would cascade into shape errors. Now strict separation: `L` (data-determined corpus length), `V` (data-determined vocab size), `T, B, d_model` (hyperparameters).
+- **Confused vocab indices with the encoded corpus.** Treated `[0, 1, ..., V-1]` as if they were "the tokens of the corpus". They are not. The encoded corpus is a `(L,)` sequence with each element drawn from `[0, V-1]`. The vocab is metadata; the encoded corpus is data; they only interact at the embedding lookup.
+- **Skipped the embedding step in the pipeline chain.** First version went `(B, T)` int batch → `nn.Linear` directly, omitting the embedding lookup. `nn.Linear` operates on floats; the int → float transition is mandatory and is what `nn.Embedding(V, d_model)` provides.
+- **`B` as "number of batches" instead of "batch size".** The number of batches per pass is `≈ L / (B·T)`; `B` itself is the number of sequences in *one* batch.
+- **`stoi`/`itos` type signatures swapped.** Encoder is `dict[str, int]`, decoder is `dict[int, str]` (or just the vocab list, as ultimately chosen).
+- **"Embedded corpus is a precomputed `(L, d_model)` tensor".** Wrong — embedding is a learned layer inside the model's forward pass. Pre-materializing would (a) freeze embeddings at random init, defeating training entirely, and (b) eat ~1.7 GB at d_model=384 for tiny-shakespeare alone.
+- **Q3 first answer: "rounding errors".** Marginal benefit, missed the actual reason. Real reason for integer-indexed embeddings over scalar float encoding is *expressiveness*: scalar encoding `c → W · c + b` collapses all V chars onto a 1-D affine line in `R^{d_model}` (total `d_model + 1` parameters). Integer indexing gives each char a free vector — `V · d_model` parameters — full geometric flexibility. This is the geometric story, not a numerics story.
+- **`W_E · e_i` shape error.** Wrote the matrix-vector product in the wrong order (physics column-vector instinct). ML convention is row vectors: `e_i^T · W_E` produces the i-th row of `W_E`. This convention is also why PyTorch writes `x @ W`, not `W @ x`.
+- **`32 bits = 3 bytes`.** Late-night arithmetic slip. 32 bits = 4 bytes. The "right" 3 GB answer for the one-hot tensor was due to two errors that happened to cancel (count overestimated by 25%, bytes underestimated by 25%) — won't always cancel.
+- **"128 KB is much larger than 3 GB".** Kilo / giga confusion at the same time of night.
+- **Type annotation `dict[str: int]`.** Slice syntax in a generic-parameter context. Correct is `dict[str, int]` (comma, not colon). Static checkers reject; the runtime is permissive but produces a junk type alias.
+- **`from torch._dynamo.utils import V` autocomplete artifact.** Cursor inserted an unintended import touching PyTorch internals. Always read the imports.
+- **Off-by-one: `torch.randint(0, L-T-1, (B,))`.** Confused inclusive vs exclusive upper bound. Valid offset range `[0, L-T-1]` translates to `torch.randint(0, L-T, (B,))` because the high argument is exclusive. The bug runs cleanly — wrong values silently absent — and is invisible at the shape/dtype level. Found only because the protocol forced a re-derivation of the bound on paper.
+- **`Long` doesn't exist in jaxtyping.** Used PyTorch's name for int64; jaxtyping uses numpy-style `Int64`. PyTorch's `Long` / `Float` shorthands are vestigial from the Lua/Torch7 era.
+
+## Self-quiz
+
+1. Why must the vocab be derived from `set(corpus)` (rather than enumerated in advance), and why must the resulting set be sorted before being used to build `stoi`? What goes wrong concretely if it isn't sorted?
+2. Express `nn.Embedding(V, d_model)(i)` as a one-hot matrix multiplication. Then compute the FLOP and memory ratios between the matmul implementation and the indexed-lookup implementation for `V = 50000, d_model = 768, B = 64, T = 256`. State both numbers to one significant figure.
+3. For corpus length `L` and context length `T`, derive the maximum valid offset `i` such that `get_batch` produces a well-formed `(x, y)` pair. State which slice — `x` or `y` — is the binding constraint, why, and translate the inclusive bound to the exclusive `torch.randint(0, ?, (B,))` upper bound.
+4. Suppose a colleague claims they've improved `get_batch` by storing the embedded corpus `(L, d_model)` to disk and gathering directly from that, skipping the embedding layer at training time. Explain in one paragraph why this destroys training. Cite both the gradient flow argument and the memory argument.
+5. Why does a single `(B, T)` batch produce `B · T` training examples, not `B`? Where does the supervision for the `j = T-1` position come from? What architectural feature in stage 3 is required to make these `B · T` examples *honest* rather than a trivial copy task — and what does it do mechanically?
+6. The encoded corpus is `(L,)` int64. After `nn.Embedding(V, d_model)`, the output is `(B, T, d_model)` float32. What is the result of indexing `embedding_table[encoded_corpus]` directly (not through the layer), and why is this *not* what we materialize at training time?
+7. Articulate the asymmetry between the data structures used for `stoi` (dict) and `itos` (the vocab list itself). Why is each the right choice for its access direction? In which axis would a hash map win over a list, and why doesn't that axis matter for `itos`?
+8. Char-level vocab size for tiny-shakespeare is 65, fixed by the data. GPT-2's BPE vocab is 50,257, fixed by a hyperparameter. State the structural difference: what does the BPE training algorithm do that makes its vocab size a knob the user turns? In one sentence each, name one trade-off where char-level wins and one where BPE wins.
+
+## What this enables
+
+- **Stage 2 (token + learned positional embeddings)** consumes `(x, y) = dataset.get_batch(B, T)` directly. The token-embedding layer maps the `(B, T)` int64 input to `(B, T, d_model)` float32; positional embeddings of the same shape are added in. The output of stage 2 is the input to attention.
+- **Stage 3 (scaled dot-product attention)** uses the `(B, T, d_model)` representation produced by stage 2 and introduces the causal mask that retroactively makes the `B·T` parallel training examples in `y` honest. Without that mask, the shift-by-1 supervision degenerates.
+- **Stage 9 (training loop)** drives `get_batch` repeatedly per training step, feeding each `(x, y)` into the model and computing cross-entropy between model logits and `y`. The shift-by-1 alignment is exactly what turns the cross-entropy into a next-token prediction loss.
+- **Validation eventually**: a second `TokenizedDataset` instance built from a held-out portion of the corpus, sharing the same `Tokenizer`, demonstrates the dependency-injection design choice (Tokenizer separated from Dataset) paying off.
