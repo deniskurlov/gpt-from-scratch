@@ -12,7 +12,7 @@ def test_vocab_size(tok, text):
 def test_vocab(tok, text):
     assert tok.vocab == sorted(set(text))
 
-def test_batch_size(tok, text):
+def test_batch_shape(tok, text):
     ds = TokenizedDataset(tok.encode_to_tensor(text))
     B, T = 100, 20
     x, y = ds.get_batch(B, T)
