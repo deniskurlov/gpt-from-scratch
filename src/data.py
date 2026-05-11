@@ -2,6 +2,7 @@
 import torch
 
 from jaxtyping import Int64
+from torch import Tensor
 
 
 def load_corpus() -> str:
@@ -21,14 +22,14 @@ class Tokenizer:
     def decode(self, tokens: list[int]) -> str:
         return "".join([self.vocab[t] for t in tokens])
 
-    def encode_to_tensor(self, text: str) -> Int64[torch.Tensor, "L"]:
+    def encode_to_tensor(self, text: str) -> Int64[Tensor, "L"]:
         return torch.tensor(self.encode(text), dtype=torch.long)
 
 class TokenizedDataset:
-    def __init__(self, encoded: Int64[torch.Tensor, "L"]) -> None:
+    def __init__(self, encoded: Int64[Tensor, "L"]) -> None:
         self.encoded = encoded
 
-    def get_batch(self, B: int, T: int) -> tuple[Int64[torch.Tensor, "B T"], Int64[torch.Tensor, "B T"]]:
+    def get_batch(self, B: int, T: int) -> tuple[Int64[Tensor, "B T"], Int64[Tensor, "B T"]]:
         L = len(self.encoded)
         offsets = torch.randint(0, L-T, (B,))
         idx = offsets[:, None] + torch.arange(T)[None, :]
