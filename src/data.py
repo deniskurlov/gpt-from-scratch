@@ -38,14 +38,9 @@ class TokenizedDataset:
         return x, y
 
 
-
-
-
-
-
 if __name__ == '__main__':
     
-    torch.manual_seed(42)
+    # torch.manual_seed(42)
 
     text = load_corpus()
     tok = Tokenizer(text)
