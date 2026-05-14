@@ -44,4 +44,16 @@ now after just rereading this doc. Frontier-lab-interviewer level. No softballs.
 ## What this enables
 Brief note on what stages N+1, N+2 build on this.
 
-When done, print the file path. No narrative.
+After writing the summary, also update `notes/PROGRESS.md` to reflect the
+completed stage. PROGRESS.md is the single source of truth for resume-state;
+leaving it stale defeats the session-bootstrap mechanism in CLAUDE.md.
+The update is a minimal refresh, not a full rewrite — same sections as the
+existing PROGRESS.md (which /checkpoint produces in full):
+
+- Update **Where we are**: stage N marked DONE, sub-step set to "stage N+1 not yet started",
+  last-completed line updated.
+- Update **Resume here**: 2-3 sentences pointing at stage N+1's first concrete step.
+- Refresh **Open conceptual debts**: close items resolved in stage N; add items surfaced.
+- Refresh **Code state**: add any new files (source, tests, notes) created in stage N.
+
+When done, print both file paths (the summary and the updated PROGRESS.md). No narrative.
