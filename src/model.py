@@ -33,6 +33,7 @@ class GPT(nn.Module):
     def __init__(self, V: int, T_max: int, n_heads: int, d_model: int, n_layers: int,
                  d_ff: int | None = None, dropout: float = 0.1) -> None:
         super().__init__()
+        self.V = V
         self.tok_emb = TokenEmbedding(V=V, d_model=d_model)
         self.pos_emb = LearnedPositionalEmbedding(T_max=T_max, d_model=d_model)
         self.blocks = nn.ModuleList(
@@ -61,7 +62,7 @@ class GPT(nn.Module):
         if targets is None:
             return logits
         else:
-            loss = F.cross_entropy(logits.view(-1, V), targets.view(-1))
+            loss = F.cross_entropy(logits.view(-1, self.V), targets.view(-1))
             return logits, loss
         
 
@@ -79,9 +80,6 @@ if __name__ == '__main__':
     n_layers = 6
 
     B, T = 2, 4
-
-    emb = TokenEmbedding(V=V, d_model=d_model)
-    pos_emb = LearnedPositionalEmbedding(T_max=T_max, d_model=d_model)
 
     gpt = GPT(V=V, T_max=T_max, n_heads=n_heads, d_model=d_model, n_layers=n_layers)
     
