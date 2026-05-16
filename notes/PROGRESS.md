@@ -1,12 +1,12 @@
 # Progress
 
 ## Where we are
-- **Stage:** 6 — Pointwise FFN / MLP with GELU. **DONE.** Summary at `notes/stage_6_summary.md`; substantive note at `notes/stage_6_mlp.md`.
-- **Sub-step:** Stage 7 not yet started — transformer block (pre-norm residual composition).
-- **Last completed:** Stage 6 finished with all three criteria met (12 tests passing across 3 functions: shape/dtype, parametrized parameter count over 10 (d_ff × bias) combinations, GELU-applied homogeneity-violation check; brief inline-comment walkthrough; toy shape prediction through up_proj → GELU → down_proj). `/stage-done 6` produced summary + PROGRESS.md refresh.
+- **Stage:** 7 — Transformer Block. **DONE.** Summary at `notes/stage_7_summary.md`.
+- **Sub-step:** Stage 8 not yet started — full GPT (stack of blocks + embeddings + final LayerNorm + unembedding head).
+- **Last completed:** Stage 7 finished with all three criteria met (5 tests passing: shape/dtype, causality-in-eval-mode, parameter count with `d_ff=6·d_model` breaking the 4× coincidence, residual structure at p=0 via manual composition, dropout train-vs-eval behavior; verbal explanation via the conceptual probe answers for the four design choices — pre-norm form, two separate LayerNorms, attention-then-MLP ordering, dropout placement on contribution; toy shape prediction "all `(B, T, d_model)` throughout" verified). `/stage-done 7` produced summary + this PROGRESS.md refresh.
 
 ## Resume here
-Begin Stage 7: transformer block. This is the first stage that *composes* multiple previous stages into a single coherent unit. Pre-norm residual structure (resolved at stage 5; standard since GPT-2): `x = x + attn(LN_1(x))` followed by `x = x + mlp(LN_2(x))`. The block has two `LayerNormalization` instances (each with its own γ, β), one `MultiHeadAttention` instance, one `MLP` instance, and two residual connections. Conceptual probe should hit: pre-norm vs post-norm gradient flow (covered in stage 5), residual-connection mechanics, dropout placement (modern models often skip it; need to decide), whether to share LayerNorm across the two phases (no — each phase has its own γ, β with independent learned scales). **Full protocol intensity returns** — no calibrating to lightweight. Stage 7's design choices compose into the model architecture, and a wrong choice here silently breaks training in stages 9+ rather than surfacing immediately. After stage 7, stage 8 stacks `n_layers` blocks plus embeddings plus final LayerNorm + unembedding head into the full GPT.
+Begin Stage 8: full GPT. Stack `n_layers` `Block` instances (stage 7) with `TokenEmbedding` + `LearnedPositionalEmbedding` (stage 2) at input, a final `LayerNormalization` (stage 5) before the head, and a linear "unembedding" projection from `d_model` to `V` for logits. Decoder-only architecture, canonical since GPT-2. Conceptual probe should hit: input pipeline (token IDs → embedded → blocks → logits), weight tying between input embedding and output unembedding (common optimization — reduces params), output head choice (linear `(d_model, V)` projection — also called "lm_head"), final LayerNorm placement (between last block and head), and how the full forward composes the per-stage components. Full protocol intensity. After stage 8, stage 9 builds the training loop (AdamW + cross-entropy + LR schedule).
 
 ## Open conceptual debts
 - **Recurring `super().__init__()` wording imprecision.** In stage-2, -3, -4, -5, -6 line-by-line walkthroughs, the parent-init was described as "inheriting parent's parameters/methods". Accurate framing: `super().__init__()` initializes parent *instance state* (the `_parameters`, `_modules`, `_buffers` OrderedDicts), not parameters or methods. Five stages of the same minor imprecision — still not internalized. Worth flagging in stage 7's walkthrough since transformer block has more submodules to register.
@@ -33,9 +33,10 @@ Begin Stage 7: transformer block. This is the first stage that *composes* multip
 - `src/attention.py` — Stages 3-4: `Attention(T_max, d_k, d_v, d_model)` single-head, `MultiHeadAttention(T_max, n_heads, d_model)`. Both `bias=True` (nn.Linear default). ✓
 - `src/normalization.py` — Stage 5: `LayerNormalization(d_model, eps=1e-5, bias=True)`. ✓
 - `src/mlp.py` — Stage 6: `MLP(d_model, d_ff=None, bias=False)`. `d_ff` defaults to `4·d_model`. ✓
+- `src/model.py` (extended) — Stage 7: `Block(T_max, n_heads, d_model, d_ff=None, dropout=0.1)`. Pre-norm two-phase residual composition of stage-2/3-4/5/6 sub-modules. ✓
 - `tests/conftest.py` — shared `text` and `tok` fixtures (module-scoped). ✓
 - `tests/test_data.py` — 7 tests (Stage 1). ✓
-- `tests/test_model.py` — 9 tests (Stage 2). ✓
+- `tests/test_model.py` — 9 tests (Stage 2) + 5 tests (Stage 7 Block; shape/dtype, causality, param count, residual-structure-at-p0, train-vs-eval-dropout). ✓
 - `tests/test_attention.py` — 10 tests (Stages 3-4; 5 single-head + 5 multi-head, mirrored). ✓
 - `tests/test_normalization.py` — 3 tests (Stage 5). ✓
 - `tests/test_mlp.py` — 12 tests (Stage 6; 1 shape + 10 parametrized param counts + 1 nonlinearity-applied). ✓
@@ -47,10 +48,11 @@ Begin Stage 7: transformer block. This is the first stage that *composes* multip
 - `notes/stage_4_*.md` (2 files: multihead_implementation, summary).
 - `notes/stage_5_*.md` (3 files: summary, workflow_fix, layernorm).
 - `notes/stage_6_*.md` (2 files: summary, mlp).
+- `notes/stage_7_*.md` (2 files: summary, transformer_block).
 - `notes/stage_14_swiglu_reference.md` — forward reference for the optional SwiGLU migration.
 - `.claude/commands/stage-done.md` — updated 2026-05-14 to refresh PROGRESS.md after writing the summary. `.claude/commands/checkpoint.md` and `note.md` unchanged.
-- **41 tests passing total** (7 data + 9 model + 10 attention + 3 normalization + 12 mlp). Smoke tests in each `__main__` block also work.
-- **No transformer block, no full GPT, no training loop yet.** Stages 7-15 not begun.
+- **46 tests passing total** (7 data + 14 model [9 stage-2 + 5 stage-7 Block] + 10 attention + 3 normalization + 12 mlp). Smoke tests in each `__main__` block also work.
+- **No full GPT, no training loop yet.** Stages 8-15 not begun.
 
 ## Workflow updates
 - `/stage-done` now updates PROGRESS.md as a final step (added 2026-05-14). `/checkpoint` remains the full-rewrite alternative for explicit end-of-session or mid-stage snapshots.
