@@ -1,14 +1,16 @@
-
+import pathlib
 import torch
-import torch.nn.functional as F
 
 from math import cos, pi
+from typing import Callable
 
 from src.data import load_corpus, Tokenizer, TokenizedDataset
 from src.model import GPT
 
 
-def make_lr_lambda(warmup_steps: int, total_steps: int, min_lr_ratio: float) -> float:
+def make_lr_lambda(
+    warmup_steps: int, total_steps: int, min_lr_ratio: float
+    ) -> Callable[[int], float] :
         def lr_lambda(step: int) -> float:
             if step < warmup_steps:
                 return step / warmup_steps
@@ -79,24 +81,26 @@ def main() -> None:
         )
 
     for step in range(total_steps):
+        if step % 200 == 0:
+            val_loss = eval_loss(
+                model=model, ds_val=ds_val, B=B, T=T, eval_iters=eval_iters, device=device
+                )
         x, y = ds_train.get_batch(B, T)
         x, y = x.to(device), y.to(device)
-        logits, loss = model(x, targets=y)
+        _, loss = model(x, targets=y)
         optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         scheduler.step()
         if step % 200 == 0:
-            val_loss = eval_loss(
-                model=model, ds_val=ds_val, B=B, T=T, eval_iters=eval_iters, device=device
-                )
             print(f"step: {step}  lr: {optimizer.param_groups[0]['lr']:.2e}  train_loss: {loss.item():.4f} val_loss: {val_loss:.4f}")
 
     final_val_loss = eval_loss(
         model=model, ds_val=ds_val, B=B, T=T, eval_iters=eval_iters, device=device
     )
     print(f"final val_loss: {final_val_loss}")
-
+    pathlib.Path('checkpoints').mkdir(exist_ok=True)
+    torch.save(model.state_dict(), 'checkpoints/model.pt')
 if __name__ == '__main__':
     main()
