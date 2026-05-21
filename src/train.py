@@ -1,9 +1,11 @@
 import pathlib
 import torch
 
+from dataclasses import asdict
 from math import cos, pi
 from typing import Callable
 
+from src.config import GPTConfig, TrainConfig
 from src.data import load_corpus, Tokenizer, TokenizedDataset
 from src.model import GPT
 
@@ -33,25 +35,8 @@ def eval_loss(
     model.train()
     return losses.mean().item()
 
-def main() -> None:    
-    seed = 42
-    T_max = 256
-    d_model = 128
-    n_heads = 4
-    n_layers = 6
-
-    B, T = 64, 256
+def main() -> None:
     
-    warmup_steps = 100
-    total_steps = 5000
-    min_lr_ratio = 0.1
-
-    eval_iters = 20
-
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    
-    torch.manual_seed(seed)
-
     text = load_corpus()
     tok = Tokenizer(text)
     encoded_text = tok.encode_to_tensor(text)
@@ -61,46 +46,82 @@ def main() -> None:
     ds_val = TokenizedDataset(
         encoded_text[int(0.9 * len(encoded_text)):]
     )
-
     V = tok.vocab_size
-    
-    model = GPT(V=V, T_max=T_max, n_heads=n_heads, d_model=d_model, n_layers=n_layers)
+
+    cfg = TrainConfig(
+        GPTConfig(V=V),
+    )
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    torch.manual_seed(cfg.seed)
+
+    model = GPT(
+        V=V,
+        T_max=cfg.model.T_max,
+        n_heads=cfg.model.n_heads,
+        d_model=cfg.model.d_model,
+        n_layers=cfg.model.n_layers,
+        d_ff=cfg.model.d_ff,
+        dropout=cfg.model.dropout
+    )
     model.to(device)
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=1e-3,
-        betas=(0.9, 0.999),
-        eps=1e-8,
-        weight_decay=0.1
+        lr=cfg.lr,
+        betas=cfg.betas,
+        eps=cfg.eps,
+        weight_decay=cfg.weight_decay
     )
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer=optimizer,
-        lr_lambda=make_lr_lambda(warmup_steps=warmup_steps, total_steps=total_steps, min_lr_ratio=min_lr_ratio)
+        lr_lambda=make_lr_lambda(
+            warmup_steps=cfg.warmup_steps, 
+            total_steps=cfg.total_steps,
+            min_lr_ratio=cfg.min_lr_ratio
+            )
         )
 
-    for step in range(total_steps):
-        if step % 200 == 0:
+    print("=== config ===")
+    for k, v in asdict(cfg).items():                                                                  
+        if isinstance(v, dict):                               
+            for sub_k, sub_v in v.items():
+                print(f"  {k}.{sub_k}: {sub_v}")                                                      
+        else:
+            print(f"  {k}: {v}")                                                                      
+    print("===")          
+    for step in range(cfg.total_steps):
+        if step % cfg.eval_interval == 0:
             val_loss = eval_loss(
-                model=model, ds_val=ds_val, B=B, T=T, eval_iters=eval_iters, device=device
+                model=model, 
+                ds_val=ds_val, 
+                B=cfg.B, 
+                T=cfg.T, 
+                eval_iters=cfg.eval_iters, 
+                device=device
                 )
-        x, y = ds_train.get_batch(B, T)
+        x, y = ds_train.get_batch(cfg.B, cfg.T)
         x, y = x.to(device), y.to(device)
         _, loss = model(x, targets=y)
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.grad_clip_norm)
         optimizer.step()
         scheduler.step()
-        if step % 200 == 0:
+        if step % cfg.eval_interval == 0:
             print(f"step: {step}  lr: {optimizer.param_groups[0]['lr']:.2e}  train_loss: {loss.item():.4f} val_loss: {val_loss:.4f}")
 
     final_val_loss = eval_loss(
-        model=model, ds_val=ds_val, B=B, T=T, eval_iters=eval_iters, device=device
+        model=model, ds_val=ds_val, B=cfg.B, T=cfg.T, eval_iters=cfg.eval_iters, device=device
     )
     print(f"final val_loss: {final_val_loss}")
     pathlib.Path('checkpoints').mkdir(exist_ok=True)
-    torch.save(model.state_dict(), 'checkpoints/model.pt')
+    torch.save({
+        'step': step,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'config': asdict(cfg)
+    }, 'checkpoints/model.pt')
 if __name__ == '__main__':
     main()
