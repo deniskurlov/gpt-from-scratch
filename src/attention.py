@@ -5,6 +5,8 @@ from math import sqrt
 from jaxtyping import Float32
 from torch import nn, Tensor
 
+from src.cache import KVCache
+
 
 class Attention(nn.Module):
     def __init__(self, T_max: int, d_k: int, d_v: int, d_model: int) -> None:
@@ -37,20 +39,32 @@ class MultiHeadAttention(nn.Module):
         self.qkv_proj = nn.Linear(d_model, 3*d_model)
         self.out_proj = nn.Linear(d_model, d_model)
     
-    def forward(self, x: Float32[Tensor, "B T d_model"]) -> Float32[Tensor, "B T d_model"]:
-        B, T = x.shape[:2]
+    def forward(
+        self,
+        x: Float32[Tensor, "B T_new d_model"],
+        cache: None | KVCache = None
+        ) -> tuple[Float32[Tensor, "B T_new d_model"], KVCache | None]:
+        B, T_new = x.shape[:2]
         qkv = self.qkv_proj(x)
-        q, k, v = qkv.split([self.d_model, self.d_model, self.d_model], dim=-1)  # each (B, T, d_model)
+        q, k, v = qkv.split([self.d_model, self.d_model, self.d_model], dim=-1)  # each (B, T_new, d_model)
         q, k, v = (
-            p.view(B, T, self.n_heads, self.head_dim).transpose(-2, -3) for p in (q, k, v)
-            )  # each (B, n_heads, T, head_dim)
-        scores = q @ k.transpose(-1, -2) / sqrt(self.head_dim)  # (B, n_heads, T, T)
-        scores = scores.masked_fill(~self.mask[:T, :T], float('-inf'))
-        attn = F.softmax(scores, dim=-1)  # (B, n_heads, T, T)
-        out = attn @ v  # (B, n_heads, T, head_dim)
-        out = out.transpose(-2, -3).reshape(B, T, self.d_model)  # (B, T, d_model)
+            p.view(B, T_new, self.n_heads, self.head_dim).transpose(-2, -3) for p in (q, k, v)
+            )  # each (B, n_heads, T_new, head_dim)
+        if cache is None: 
+            T_cached_before = 0
+            K_full, V_full = k, v
+        else:
+            T_cached_before = len(cache)
+            cache.append(k, v)
+            K_full, V_full = cache.get()
+        T_total = T_new + T_cached_before
+        scores = q @ K_full.transpose(-1, -2) / sqrt(self.head_dim)  # (B, n_heads, T_new, T_total)
+        scores = scores.masked_fill(~self.mask[T_cached_before : T_total, : T_total], float('-inf'))
+        attn = F.softmax(scores, dim=-1)  # (B, n_heads, T_new, T_total)
+        out = attn @ V_full  # (B, n_heads, T_new, head_dim)
+        out = out.transpose(-2, -3).reshape(B, T_new, self.d_model)  # (B, T_new, d_model)
         output = self.out_proj(out)
-        return output
+        return output, cache
 
 
 if __name__ == '__main__':
@@ -62,7 +76,7 @@ if __name__ == '__main__':
 
     mha = MultiHeadAttention(T_max=256, n_heads=4, d_model=128)
     x = torch.randn(2, 4, 128)
-    out = mha(x)
+    out, _ = mha(x)
 
 
 

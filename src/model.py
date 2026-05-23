@@ -7,6 +7,7 @@ from jaxtyping import Int64, Float32
 from torch import Tensor, nn
 
 from src.attention import MultiHeadAttention
+from src.cache import KVCache
 from src.embedding import LearnedPositionalEmbedding, TokenEmbedding
 from src.data import load_corpus, Tokenizer, TokenizedDataset
 from src.normalization import LayerNormalization
@@ -24,10 +25,15 @@ class Block(nn.Module):
         self.dropout1 = nn.Dropout(p=dropout)
         self.dropout2 = nn.Dropout(p=dropout)
 
-    def forward(self, x: Float32[Tensor, "B T d_model"]) -> Float32[Tensor, "B T d_model"]:
-        x = x + self.dropout1(self.attn(self.ln1(x)))
+    def forward(
+        self,
+        x: Float32[Tensor, "B T d_model"],
+        cache: KVCache | None = None
+        ) -> tuple[Float32[Tensor, "B T d_model"], KVCache | None]:
+        attn_out, cache = self.attn(self.ln1(x), cache)
+        x = x + self.dropout1(attn_out)
         x = x + self.dropout2(self.mlp(self.ln2(x)))
-        return x
+        return x, cache
 
 class GPT(nn.Module):
     def __init__(self, V: int, T_max: int, n_heads: int, d_model: int, n_layers: int,
@@ -50,13 +56,17 @@ class GPT(nn.Module):
         
     def forward(self,
                 ids: Int64[Tensor, "B T"],
-                targets: Int64[Tensor, "B T"] | None = None
+                targets: Int64[Tensor, "B T"] | None = None,
+                cache: list[KVCache] | None = None
         ) -> Float32[Tensor, "B T V"] | tuple[Float32[Tensor, "B T V"], Float32[Tensor, ""]]:
+        assert cache is None or len(cache) == len(self.blocks)
         B, T = ids.shape
-        positions = torch.arange(T, device=ids.device)
+        start_pos = 0 if cache is None else len(cache[0])
+        positions = torch.arange(start_pos, start_pos + T, device=ids.device)
         x = self.tok_emb(ids) + self.pos_emb(positions)
-        for block in self.blocks: 
-            x = block(x)
+        for i, block in enumerate(self.blocks):
+            layer_cache = None if cache is None else cache[i]
+            x, _ = block(x, layer_cache)  # cache is mutated in place, discard the return (_)
         x = self.final_ln(x)
         logits = self.lm_head(x)
 
@@ -90,13 +100,18 @@ class GPT(nn.Module):
         max_new_tokens: int,
         temperature: float = 1.0,
         top_k: int | None = None,
-        top_p: float | None = None
+        top_p: float | None = None,
+        use_cache: bool = True
         ) -> Int64[Tensor, "B T+max_new_tokens"]:
         self.eval()
         with torch.no_grad():
-            for _ in range(max_new_tokens):
-                ids_in = ids[:, -self.T_max:]
-                logits = self(ids_in)[:, -1, :]  # shape (B, V)
+            cache = [KVCache() for _ in range(len(self.blocks))] if use_cache else None
+            for step in range(max_new_tokens):
+                if use_cache:
+                    ids_in = ids if step == 0 else next_token
+                else:
+                    ids_in = ids[:, -self.T_max:]
+                logits = self(ids_in, cache=cache)[:, -1, :]  # shape (B, V)
                 if temperature == 0.0:
                     next_token = logits.argmax(dim=-1, keepdim=True)
                 else:
