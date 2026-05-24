@@ -1,5 +1,4 @@
 import argparse
-from pytest import Parser
 import torch
 
 from src.data import load_corpus, Tokenizer
@@ -13,7 +12,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--temperature', type=float, default=0.7)
     parser.add_argument('--top-k', type=int, default=None)
     parser.add_argument('--top-p', type=float, default=None)
-    parser.add_argument('--use-cache', type=bool, default=False)
+    parser.add_argument('--use-cache', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--seed', type=int, default=None)
     return parser.parse_args()
 
@@ -26,7 +25,8 @@ def main() -> None:
 
     ckpt = torch.load('checkpoints/model.pt', map_location=device)
 
-    torch.manual_seed(args.seed)
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
 
     model_cfg_dict = ckpt['config']['model']
     model = GPT(**model_cfg_dict)
