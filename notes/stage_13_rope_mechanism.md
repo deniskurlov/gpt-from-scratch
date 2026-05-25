@@ -1,0 +1,37 @@
+# Stage 13 — RoPE Mechanism and Ceiling Lifting
+
+## 2026-05-25
+
+## What I worked on
+Stage 13 — building RoPE from scratch, refactoring to on-the-fly cos/sin and on-the-fly causal mask, implementing sliding-window KV cache, and retraining the model end-to-end.
+
+## Key concepts
+- **Relative-position identity**: `<R_m · q, R_n · k> = q^T R_{m-n} k`. The score depends only on `m − n`. Holds because rotations are orthogonal (`R_n^T = R_n^{-1} = R_{-n}`) and abelian within commuting subgroups.
+- **Block-diagonal structure is forced, not chosen**: `SO(d ≥ 3)` is non-abelian. Relative-position needs `R_a R_b^T = R_{a-b}`, which is exactly the abelian group law. The maximal abelian subgroups of `SO(2n)` are `SO(2)^n` — direct sums of 2D rotations. RoPE has no other option.
+- **Multi-scale frequencies** `θ_i = base^(-2i/d)` with `base=10000`: spans ~4 decades of position scales. Fast pairs discriminate local positions; slow pairs discriminate long-range. Linear spacing would cap at one scale; single frequency collapses position-dependence to rank 2.
+- **Rotate Q and K, not V**: the relative-position property emerges from the dot product `Q · K^T`. V is the content retrieved by scores; rotating V would bake absolute position into the residual stream.
+- **Store unrotated K + on-the-fly RoPE + sliding window**: this trifecta is what makes long-context attention work. Storing rotated K would lock cached vectors to their original absolute positions; sliding the window would invalidate them.
+- **Mask formula unification**: `j ≤ T_total - T_new + i`. Handles training (T_cached_before=0), prompt-load, single-token inference, and sliding-window. `window_start` cancels because Q and K share the same offset — only relative spacing matters for causality.
+
+## What I got wrong
+- **Factor-of-2 in frequency formula, twice**. `-2 * arange(0, head_dim, 2) / head_dim` stacks two factors of 2 (`-2 *` AND `step=2`). Resulting exponents were `-4i/d` instead of `-2i/d`. The slogan "exponent times 2 over d" doesn't pin down where the 2 lives; needed the explicit `arange(head_dim // 2)` form with step=1 to disambiguate.
+- **`inv_freq` as plain attribute, not `register_buffer`**. Same lesson as the mask buffer in stage 12. Plain attributes don't migrate via `.to(device)` — surfaces as cross-device error in `torch.outer` at first forward call after the device move. Subtle: construction succeeds, training-loop setup succeeds, only the first MPS forward fails.
+- **`RoPE.forward` computed rotation but didn't return it**. `torch.stack(...).flatten(-2)` evaluated and immediately discarded; `return x` returned the unrotated input. Caught only because I wrote the inner-product invariance smoke test — without that, RoPE would have silently no-op'd and training would have looked fine (using token embeddings only — model would still learn local structure but no positional differentiation).
+- **"We cache attention scores"** (recurrent from stage 12). Wrong; Q changes per step, so no past computation involves the current Q. Only K and V are cacheable. The name "KV cache" is literal.
+- **`k = self.rope(K_full, ...)`** — wrong LHS variable; the score matmul then used unrotated `K_full`. The rotation was computed, assigned to `k`, never used. Variable shadowing during refactor (stage 12 had the same bug class with `out` reassignments).
+- **`rope_base` as required arg without default** — broke `Block` and `MultiHeadAttention` callsites. Required cascading fix through GPT → Block → MHA. Adding required params with many call sites needs an audit.
+- **Precomputed cos_cached didn't lift the T_max ceiling**. First attempt computed `cos_cached` of shape `(T_max, head_dim/2)`. Generation past T_max sliced beyond the buffer's bounds — Python slicing is lenient, returns truncated tensor, downstream `a * cos` fails with shape mismatch. The precomputed-table approach inherits the same fixed-size constraint as `LearnedPositionalEmbedding`'s `nn.Embedding(T_max, ...)`. Lifting the ceiling required the full on-the-fly refactor (cos/sin computed in forward, mask computed in forward).
+- **`type=bool` argparse footgun** (recurrent from stage 11). `--use-cache False` parsed as `True` because `bool("False") = True` in Python (non-empty string). Canonical fix is `action=argparse.BooleanOptionalAction`. Same gotcha bit me twice — durable enough to be worth memorizing.
+- **MPS silent garbage on out-of-range indices** (carried over from stage 12). T_max overflow surfaced as shape mismatch deep in attention, not as IndexError at the source. Structural fix (removing the precomputed tables) eliminates the failure mode entirely.
+
+## Why this works
+- **Abelian constraint forces block-diagonal**: the relative-position property `R_a R_b^T = R_{a-b}` is the group law of an abelian group. SO(d) is non-abelian for `d ≥ 3`. The only abelian subgroups are direct sums of SO(2)s. Within each SO(2) block, the group law holds. So the d-dimensional rotation must decompose into d/2 independent 2D rotations. **This isn't a design choice; it's the unique structure that satisfies the constraint.**
+- **Multi-scale via exponential spacing**: each 2D pair gives rank-2 position dependence in the inner product (`A·cos((m-n)θ) + B·sin((m-n)θ)`). With d/2 different θ_i, the position-dependence space is rank-d. Exponential spacing covers many orders of magnitude of "position scale," letting the model discriminate adjacent positions AND distant positions in the same attention computation.
+- **Store unrotated K** lets us re-rotate at attention time at the cache's *current* effective positions. With sliding window, those positions change as the window slides; pre-rotated K would be stuck at original positions. The "store rotated, no re-rotation" path is faster (one rotation per token, not per step) but breaks sliding-window. Stage 13's choice: trade modest per-step compute for long-context flexibility.
+- **Mask formula's window_start cancellation**: query at sorted-pos `i` is at absolute position `window_start + T_total - T_new + i`; key at sorted-pos `j` is at `window_start + j`. Causal: `window_start + j ≤ window_start + T_total - T_new + i` → `j ≤ T_total - T_new + i`. The `window_start` cancels because it's a shared offset; only relative spacing matters. Same formula works for training (T_cached_before=0), prompt-load, and sliding-window.
+
+## Open questions
+- **Three-way pos-encoding ablation** (Learned / Sinusoidal / RoPE) is still un-done. Direct experimental comparison would settle the "do we actually see RoPE quality gains at this scale" question. Predicted: indistinguishable training loss; only RoPE generates past T_max architecturally. Worth doing as a stage-13b extension.
+- **Sliding-window position-interpolation tricks** (YaRN, NTK-RoPE) extend effective context past training T_max without retraining. Not implemented; would be a forward reference for any longer-context production work.
+- **Did we really need on-the-fly cos/sin?** Functionally a larger precomputed table would also work. But on-the-fly is the *honest* fix — no hidden constant, the architecture has no ceiling rather than a tunable one. Pedagogically right; production might choose precomputation for the marginal speedup.
+- **Quality impact of RoPE at our scale**: indistinguishable from absolute-pos-emb in samples we generated. The gap between "architecture supports long context" and "model uses long context" is the bottleneck — and that requires more capacity + more training + better data, not just better architecture.

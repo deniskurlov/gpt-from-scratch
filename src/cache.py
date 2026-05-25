@@ -24,6 +24,7 @@ class KVCache():
             self.K = torch.cat([self.K, k_new], dim=-2)
             self.V = torch.cat([self.V, v_new], dim=-2)
         self.total_appended += T_new
+
         if self.max_size is not None and self.K.shape[-2] > self.max_size:
             self.K = self.K[..., -self.max_size:, :]
             self.V = self.V[..., -self.max_size:, :]
