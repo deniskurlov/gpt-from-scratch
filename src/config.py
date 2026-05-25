@@ -8,6 +8,7 @@ class GPTConfig:
     d_model: int = 128
     n_heads: int = 4
     n_layers: int = 6
+    rope_base: float = 10_000.0
     d_ff: int | None = None
     dropout: float = 0.1
 

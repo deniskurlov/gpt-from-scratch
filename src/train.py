@@ -60,6 +60,7 @@ def main() -> None:
         n_heads=cfg.model.n_heads,
         d_model=cfg.model.d_model,
         n_layers=cfg.model.n_layers,
+        rope_base=cfg.model.rope_base,
         d_ff=cfg.model.d_ff,
         dropout=cfg.model.dropout
     )

@@ -6,6 +6,7 @@ from jaxtyping import Float32
 from torch import nn, Tensor
 
 from src.cache import KVCache
+from src.embedding import RoPE
 
 
 class Attention(nn.Module):
@@ -28,42 +29,64 @@ class Attention(nn.Module):
         output = self.out_proj(out)
         return output
 
+
 class MultiHeadAttention(nn.Module):
-    def __init__(self, T_max: int, n_heads: int, d_model: int) -> None:
+    def __init__(self, T_max: int, n_heads: int, d_model: int, rope_base: float) -> None:
         super().__init__()
-        assert d_model % n_heads == 0, f"d_model={d_model} must be divisible by n_heads={n_heads}"
-        self.register_buffer('mask', torch.tril(torch.ones(T_max, T_max)).bool())
+        assert d_model % n_heads == 0, f'd_model={d_model} must be divisible by n_heads={n_heads}'
+        # self.register_buffer('mask', torch.tril(torch.ones(T_max, T_max)).bool())
         self.d_model = d_model
         self.n_heads = n_heads
         self.head_dim = d_model // n_heads
+        self.rope_base = rope_base
         self.qkv_proj = nn.Linear(d_model, 3*d_model)
         self.out_proj = nn.Linear(d_model, d_model)
+        self.rope = RoPE(head_dim=self.head_dim, base=self.rope_base)
     
     def forward(
         self,
         x: Float32[Tensor, "B T_new d_model"],
         cache: None | KVCache = None
         ) -> tuple[Float32[Tensor, "B T_new d_model"], KVCache | None]:
+        
         B, T_new = x.shape[:2]
+        
         qkv = self.qkv_proj(x)
         q, k, v = qkv.split([self.d_model, self.d_model, self.d_model], dim=-1)  # each (B, T_new, d_model)
         q, k, v = (
             p.view(B, T_new, self.n_heads, self.head_dim).transpose(-2, -3) for p in (q, k, v)
             )  # each (B, n_heads, T_new, head_dim)
+        
         if cache is None: 
             T_cached_before = 0
+            total_appended_before = 0
             K_full, V_full = k, v
         else:
             T_cached_before = len(cache)
+            total_appended_before = cache.total_appended
             cache.append(k, v)
             K_full, V_full = cache.get()
-        T_total = T_new + T_cached_before
+        
+        T_total = K_full.shape[-2]
+
+        start_pos_Q = total_appended_before                           # abs pos of new Q
+        start_pos_K = cache.window_start if cache is not None else 0  # abs pos of cache's oldest entry
+
+        q = self.rope(q, start_pos=start_pos_Q)  # new Q at absolute position total_appended_before
+        K_full = self.rope(K_full, start_pos=start_pos_K)  # recalculate every step to allow for sliding window past T_max
+        
         scores = q @ K_full.transpose(-1, -2) / sqrt(self.head_dim)  # (B, n_heads, T_new, T_total)
-        scores = scores.masked_fill(~self.mask[T_cached_before : T_total, : T_total], float('-inf'))
+        i_range = torch.arange(T_new, device=x.device)
+        j_range = torch.arange(T_total, device=x.device)
+        causal_mask = j_range[None, :] <= (T_total - T_new + i_range[:, None])
+        scores = scores.masked_fill(~causal_mask, float('-inf'))
+        
         attn = F.softmax(scores, dim=-1)  # (B, n_heads, T_new, T_total)
+        
         out = attn @ V_full  # (B, n_heads, T_new, head_dim)
         out = out.transpose(-2, -3).reshape(B, T_new, self.d_model)  # (B, T_new, d_model)
         output = self.out_proj(out)
+        
         return output, cache
 
 
@@ -74,7 +97,7 @@ if __name__ == '__main__':
     # x = torch.randn(2, 4, 128)
     # out = attn(x)
 
-    mha = MultiHeadAttention(T_max=256, n_heads=4, d_model=128)
+    mha = MultiHeadAttention(T_max=256, n_heads=4, d_model=128, rope_base=10_000.0)
     x = torch.randn(2, 4, 128)
     out, _ = mha(x)
 

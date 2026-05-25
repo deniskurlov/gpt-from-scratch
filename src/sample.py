@@ -43,7 +43,8 @@ def main() -> None:
         temperature=args.temperature, 
         top_k=args.top_k,
         top_p=args.top_p,
-        use_cache=args.use_cache
+        use_cache=args.use_cache,
+        verbose=True
         )
     text = tok.decode(out_ids[0].tolist())
     print(text)

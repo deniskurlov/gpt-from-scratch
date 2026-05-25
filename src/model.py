@@ -8,19 +8,28 @@ from torch import Tensor, nn
 
 from src.attention import MultiHeadAttention
 from src.cache import KVCache
-from src.embedding import LearnedPositionalEmbedding, TokenEmbedding
+from src.embedding import TokenEmbedding
 from src.data import load_corpus, Tokenizer, TokenizedDataset
 from src.normalization import LayerNormalization
 from src.mlp import MLP
 
 
 class Block(nn.Module):
-    def __init__(self, T_max: int, n_heads: int, d_model: int, 
-                 d_ff: int | None = None, dropout: float = 0.1) -> None:
+    def __init__(
+        self,
+        T_max: int,
+        n_heads: int,
+        d_model: int,
+        rope_base: float,
+        d_ff: int | None,
+        dropout: float
+        ) -> None:
         super().__init__()
         self.ln1 = LayerNormalization(d_model)
         self.ln2 = LayerNormalization(d_model)
-        self.attn = MultiHeadAttention(T_max=T_max, n_heads=n_heads, d_model=d_model)
+        self.attn = MultiHeadAttention(
+            T_max=T_max, n_heads=n_heads, d_model=d_model, rope_base=rope_base
+            )
         self.mlp = MLP(d_model=d_model, d_ff=d_ff)
         self.dropout1 = nn.Dropout(p=dropout)
         self.dropout2 = nn.Dropout(p=dropout)
@@ -35,16 +44,26 @@ class Block(nn.Module):
         x = x + self.dropout2(self.mlp(self.ln2(x)))
         return x, cache
 
+
 class GPT(nn.Module):
-    def __init__(self, V: int, T_max: int, n_heads: int, d_model: int, n_layers: int,
-                 d_ff: int | None = None, dropout: float = 0.1) -> None:
+    def __init__(
+        self,
+        V: int,
+        T_max: int,
+        n_heads: int,
+        d_model: int,
+        n_layers: int,
+        rope_base: float,
+        d_ff: int | None,
+        dropout: float
+        ) -> None:
         super().__init__()
         self.V = V
         self.T_max = T_max
         self.tok_emb = TokenEmbedding(V=V, d_model=d_model)
-        self.pos_emb = LearnedPositionalEmbedding(T_max=T_max, d_model=d_model)
+        # self.pos_emb = LearnedPositionalEmbedding(T_max=T_max, d_model=d_model)
         self.blocks = nn.ModuleList(
-            [Block(T_max=T_max, n_heads=n_heads, d_model=d_model, 
+            [Block(T_max=T_max, n_heads=n_heads, d_model=d_model, rope_base=rope_base,
                     d_ff=d_ff, dropout=dropout) for _ in range(n_layers)]
         )
         self.final_ln = LayerNormalization(d_model)
@@ -60,10 +79,11 @@ class GPT(nn.Module):
                 cache: list[KVCache] | None = None
         ) -> Float32[Tensor, "B T V"] | tuple[Float32[Tensor, "B T V"], Float32[Tensor, ""]]:
         assert cache is None or len(cache) == len(self.blocks)
-        B, T = ids.shape
-        start_pos = 0 if cache is None else len(cache[0])
-        positions = torch.arange(start_pos, start_pos + T, device=ids.device)
-        x = self.tok_emb(ids) + self.pos_emb(positions)
+        T = ids.shape[-1]
+        # start_pos = 0 if cache is None else len(cache[0])
+        # positions = torch.arange(start_pos, start_pos + T, device=ids.device)
+        # x = self.tok_emb(ids) + self.pos_emb(positions)
+        x = self.tok_emb(ids)
         for i, block in enumerate(self.blocks):
             layer_cache = None if cache is None else cache[i]
             x, _ = block(x, layer_cache)  # cache is mutated in place, discard the return (_)
@@ -101,12 +121,16 @@ class GPT(nn.Module):
         temperature: float = 1.0,
         top_k: int | None = None,
         top_p: float | None = None,
-        use_cache: bool = True
+        use_cache: bool = True,
+        verbose: bool = False
         ) -> Int64[Tensor, "B T+max_new_tokens"]:
         self.eval()
         with torch.no_grad():
-            cache = [KVCache() for _ in range(len(self.blocks))] if use_cache else None
+            cache = [KVCache(max_size=self.T_max) for _ in range(len(self.blocks))] if use_cache else None
             for step in range(max_new_tokens):
+                if verbose and cache is not None and step % 10 == 0:
+                    print(f"step={step:4d}  window_start={cache[0].window_start:4d}  "                 
+                        f"len={len(cache[0]):4d}  total={cache[0].total_appended:4d}")
                 if use_cache:
                     ids_in = ids if step == 0 else next_token
                 else:
@@ -142,7 +166,10 @@ if __name__ == '__main__':
 
     B, T = 1, 4
 
-    gpt = GPT(V=V, T_max=T_max, n_heads=n_heads, d_model=d_model, n_layers=n_layers)
+    gpt = GPT(
+        V=V, T_max=T_max, n_heads=n_heads, d_model=d_model, n_layers=n_layers,
+        rope_base=10_000.0, d_ff=None, dropout=0.1
+        )
     
     x, y = ds.get_batch(B, T)
     logits, loss = gpt(x, targets=y)
