@@ -5,6 +5,7 @@ import torch.nn.functional as F
 
 from jaxtyping import Int64, Float32
 from torch import Tensor, nn
+from typing import Iterator
 
 from src.attention import MultiHeadAttention
 from src.cache import KVCache
@@ -17,7 +18,6 @@ from src.mlp import MLP
 class Block(nn.Module):
     def __init__(
         self,
-        T_max: int,
         n_heads: int,
         d_model: int,
         rope_base: float,
@@ -27,9 +27,7 @@ class Block(nn.Module):
         super().__init__()
         self.ln1 = LayerNormalization(d_model)
         self.ln2 = LayerNormalization(d_model)
-        self.attn = MultiHeadAttention(
-            T_max=T_max, n_heads=n_heads, d_model=d_model, rope_base=rope_base
-            )
+        self.attn = MultiHeadAttention(n_heads=n_heads, d_model=d_model, rope_base=rope_base)
         self.mlp = MLP(d_model=d_model, d_ff=d_ff)
         self.dropout1 = nn.Dropout(p=dropout)
         self.dropout2 = nn.Dropout(p=dropout)
@@ -63,8 +61,8 @@ class GPT(nn.Module):
         self.tok_emb = TokenEmbedding(V=V, d_model=d_model)
         # self.pos_emb = LearnedPositionalEmbedding(T_max=T_max, d_model=d_model)
         self.blocks = nn.ModuleList(
-            [Block(T_max=T_max, n_heads=n_heads, d_model=d_model, rope_base=rope_base,
-                    d_ff=d_ff, dropout=dropout) for _ in range(n_layers)]
+            [Block(n_heads=n_heads, d_model=d_model, rope_base=rope_base, d_ff=d_ff, dropout=dropout)
+             for _ in range(n_layers)]
         )
         self.final_ln = LayerNormalization(d_model)
         self.lm_head = nn.Linear(d_model, V, bias=False)
@@ -114,6 +112,54 @@ class GPT(nn.Module):
         logits[mask] = -torch.inf
         return logits
 
+    def stream(
+        self, 
+        ids: Int64[Tensor, "B T"],
+        max_new_tokens: int,
+        temperature: float = 1.0,
+        top_k: int | None = None,
+        top_p: float | None = None,
+        use_cache: bool = True
+        ) -> Iterator[Int64[Tensor, "1"]]:
+        if ids.shape[0] != 1:
+            raise ValueError("stream requires B=1; use generate for batch")
+        yield from self._self_iterator(ids=ids, max_new_tokens=max_new_tokens, temperature=temperature,
+                                       top_k=top_k, top_p=top_p, use_cache=use_cache)
+
+    def _self_iterator(
+        self, 
+        ids: Int64[Tensor, "B T"],
+        max_new_tokens: int,
+        temperature: float = 1.0,
+        top_k: int | None = None,
+        top_p: float | None = None,
+        use_cache: bool = True
+        ) -> Iterator[Int64[Tensor, "B 1"]]:
+        # the canonical generator — no B guard, internal use only
+        self.eval()
+        try:
+            with torch.no_grad():
+                cache = [KVCache(max_size=self.T_max) for _ in range(len(self.blocks))] if use_cache else None
+                for step in range(max_new_tokens):
+                    if use_cache:
+                        ids_in = ids if step == 0 else next_token
+                    else:
+                        ids_in = ids[:, -self.T_max:]
+                    logits = self(ids_in, cache=cache)[:, -1, :]  # shape (B, V)
+                    if temperature == 0.0:
+                        next_token = logits.argmax(dim=-1, keepdim=True)
+                    else:
+                        logits = logits / temperature
+                        if top_k is not None:
+                            self.apply_top_k_(logits, top_k)
+                        if top_p is not None:
+                            self.apply_top_p_(logits, top_p)
+                        probs = F.softmax(logits, dim=-1)
+                        next_token = torch.multinomial(probs, num_samples=1)
+                    yield next_token
+        finally: 
+            self.train()
+
     def generate(
         self, 
         ids: Int64[Tensor, "B T"],
@@ -121,33 +167,13 @@ class GPT(nn.Module):
         temperature: float = 1.0,
         top_k: int | None = None,
         top_p: float | None = None,
-        use_cache: bool = True,
-        verbose: bool = False
+        use_cache: bool = True
         ) -> Int64[Tensor, "B T+max_new_tokens"]:
-        self.eval()
-        with torch.no_grad():
-            cache = [KVCache(max_size=self.T_max) for _ in range(len(self.blocks))] if use_cache else None
-            for step in range(max_new_tokens):
-                if verbose and cache is not None and step % 10 == 0:
-                    print(f"step={step:4d}  window_start={cache[0].window_start:4d}  "                 
-                        f"len={len(cache[0]):4d}  total={cache[0].total_appended:4d}")
-                if use_cache:
-                    ids_in = ids if step == 0 else next_token
-                else:
-                    ids_in = ids[:, -self.T_max:]
-                logits = self(ids_in, cache=cache)[:, -1, :]  # shape (B, V)
-                if temperature == 0.0:
-                    next_token = logits.argmax(dim=-1, keepdim=True)
-                else:
-                    logits = logits / temperature
-                    if top_k is not None:
-                        self.apply_top_k_(logits, top_k)
-                    if top_p is not None:
-                        self.apply_top_p_(logits, top_p)
-                    probs = F.softmax(logits, dim=-1)
-                    next_token = torch.multinomial(probs, num_samples=1)
-                ids = torch.cat([ids, next_token], dim=-1)
-        self.train()
+        for next_token in self._self_iterator(ids, max_new_tokens, 
+                                      temperature=temperature,
+                                      top_k=top_k, top_p=top_p,
+                                      use_cache=use_cache):
+            ids = torch.cat([ids, next_token], dim=-1)
         return ids
 
 

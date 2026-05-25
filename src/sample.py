@@ -37,17 +37,27 @@ def main() -> None:
     tok = Tokenizer(load_corpus())                                                                             
     ids = tok.encode_to_tensor(prompt).unsqueeze(0).to(device)   # (1, L) 
 
-    out_ids = model.generate(
-        ids, 
-        max_new_tokens=args.max_new_tokens, 
-        temperature=args.temperature, 
-        top_k=args.top_k,
-        top_p=args.top_p,
-        use_cache=args.use_cache,
-        verbose=True
-        )
-    text = tok.decode(out_ids[0].tolist())
-    print(text)
+    # This works only with model.generate(...), not with model.stream(...)
+    # out_ids = model.generate(
+    #     ids, 
+    #     max_new_tokens=args.max_new_tokens, 
+    #     temperature=args.temperature, 
+    #     top_k=args.top_k,
+    #     top_p=args.top_p,
+    #     use_cache=args.use_cache
+    #     )
+    # text = tok.decode(out_ids[0].tolist())
+    # print(text)
+
+    print(prompt, end='', flush=True)
+    for next_token in model.stream(ids, max_new_tokens=args.max_new_tokens,                
+                                  temperature=args.temperature,                          
+                                  top_k=args.top_k,                                      
+                                  top_p=args.top_p,
+                                  use_cache=args.use_cache):                             
+        char = tok.decode([next_token[0, 0].item()])                                       
+        print(char, end='', flush=True)             
+    print()                                     
 
 
 if __name__ == '__main__':

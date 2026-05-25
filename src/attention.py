@@ -31,10 +31,9 @@ class Attention(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, T_max: int, n_heads: int, d_model: int, rope_base: float) -> None:
+    def __init__(self, n_heads: int, d_model: int, rope_base: float) -> None:
         super().__init__()
         assert d_model % n_heads == 0, f'd_model={d_model} must be divisible by n_heads={n_heads}'
-        # self.register_buffer('mask', torch.tril(torch.ones(T_max, T_max)).bool())
         self.d_model = d_model
         self.n_heads = n_heads
         self.head_dim = d_model // n_heads
@@ -58,11 +57,9 @@ class MultiHeadAttention(nn.Module):
             )  # each (B, n_heads, T_new, head_dim)
         
         if cache is None: 
-            T_cached_before = 0
             total_appended_before = 0
             K_full, V_full = k, v
         else:
-            T_cached_before = len(cache)
             total_appended_before = cache.total_appended
             cache.append(k, v)
             K_full, V_full = cache.get()
@@ -97,7 +94,7 @@ if __name__ == '__main__':
     # x = torch.randn(2, 4, 128)
     # out = attn(x)
 
-    mha = MultiHeadAttention(T_max=256, n_heads=4, d_model=128, rope_base=10_000.0)
+    mha = MultiHeadAttention(n_heads=4, d_model=128, rope_base=10_000.0)
     x = torch.randn(2, 4, 128)
     out, _ = mha(x)
 
