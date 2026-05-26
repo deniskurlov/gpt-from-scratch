@@ -1,8 +1,9 @@
-import pathlib
+import os
 import torch
 
 from dataclasses import asdict
 from math import cos, pi
+from pathlib import Path
 from typing import Callable
 
 from src.config import GPTConfig, TrainConfig
@@ -34,6 +35,27 @@ def eval_loss(
             losses[i] = loss
     model.train()
     return losses.mean().item()
+
+
+def save_checkpoint(path: str, step: int, val_loss: float, model_state: dict,
+                    optimizer_state: dict, scheduler_state: dict, config: dict) -> None:
+    
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    
+    tmp_path = f'{path}.tmp'
+    with open(tmp_path, 'wb') as f:
+        torch.save({
+            'step': step,
+            'val_loss': val_loss,
+            'model_state_dict': model_state,
+            'optimizer_state_dict': optimizer_state,
+            'scheduler_state_dict': scheduler_state,
+            'config': config
+        }, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, path)
+
 
 def main() -> None:
     
@@ -91,6 +113,7 @@ def main() -> None:
         else:
             print(f"  {k}: {v}")                                                                      
     print("===")          
+    min_val_loss = float('inf')
     for step in range(cfg.total_steps):
         if step % cfg.eval_interval == 0:
             val_loss = eval_loss(
@@ -111,18 +134,47 @@ def main() -> None:
         scheduler.step()
         if step % cfg.eval_interval == 0:
             print(f"step: {step}  lr: {optimizer.param_groups[0]['lr']:.2e}  train_loss: {loss.item():.4f} val_loss: {val_loss:.4f}")
+            save_checkpoint(
+                path='checkpoints/latest.pt',
+                step=step, val_loss=val_loss,
+                model_state=model.state_dict(),
+                optimizer_state=optimizer.state_dict(),
+                scheduler_state=scheduler.state_dict(),
+                config=asdict(cfg)
+                )
+            if val_loss < min_val_loss:
+                min_val_loss = val_loss
+                save_checkpoint(
+                    path='checkpoints/best.pt',
+                    step=step, val_loss=val_loss,
+                    model_state=model.state_dict(),
+                    optimizer_state=optimizer.state_dict(),
+                    scheduler_state=scheduler.state_dict(),
+                    config=asdict(cfg)
+                    )
 
-    final_val_loss = eval_loss(
+    latest_val_loss = eval_loss(
         model=model, ds_val=ds_val, B=cfg.B, T=cfg.T, eval_iters=cfg.eval_iters, device=device
     )
-    print(f"final val_loss: {final_val_loss}")
-    pathlib.Path('checkpoints').mkdir(exist_ok=True)
-    torch.save({
-        'step': step,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict(),
-        'config': asdict(cfg)
-    }, 'checkpoints/model.pt')
+    print(f"Final val_loss: {latest_val_loss}")
+    save_checkpoint(
+        path='checkpoints/latest.pt',
+        step=step, val_loss=latest_val_loss,
+        model_state=model.state_dict(),
+        optimizer_state=optimizer.state_dict(),
+        scheduler_state=scheduler.state_dict(),
+        config=asdict(cfg)
+        )
+    if latest_val_loss < min_val_loss:
+        save_checkpoint(
+        path='checkpoints/best.pt',
+        step=step, val_loss=latest_val_loss,
+        model_state=model.state_dict(),
+        optimizer_state=optimizer.state_dict(),
+        scheduler_state=scheduler.state_dict(),
+        config=asdict(cfg)
+        )
+
+
 if __name__ == '__main__':
     main()
