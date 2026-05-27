@@ -8,16 +8,35 @@ class TokenEmbedding(nn.Module):
     def __init__(self, V: int, d_model: int) -> None:
         super().__init__()
         self.tok_emb = nn.Embedding(V, d_model)
+
     def forward(self, ids: Int64[Tensor, "B T"]) -> Float32[Tensor, "B T d_model"]:
         return self.tok_emb(ids)
 
 
 class LearnedPositionalEmbedding(nn.Module):
+    """Legacy reference; not used by the current GPT (which uses RoPE)."""
     def __init__(self, T_max: int, d_model: int) -> None:
         super().__init__()
         self.pos_emb = nn.Embedding(T_max, d_model)
+
     def forward(self, positions: Int64[Tensor, "T"]) -> Float32[Tensor, "T d_model"]:
         return self.pos_emb(positions)
+
+
+class SinusoidalPositionalEmbedding(nn.Module):
+    """Legacy reference; not used by the current GPT (which uses RoPE)."""
+    def __init__(self, d_model: int, base: float = 10_000.0) -> None:
+        super().__init__()
+        inv_freq = base ** (-2 * torch.arange(d_model // 2) / d_model)
+        self.register_buffer('inv_freq', inv_freq, persistent=False)
+
+    def forward(self, positions: Int64[Tensor, "T"]) -> Float32[Tensor, "T d_model"]:
+        angles = torch.outer(positions, self.inv_freq)
+        sin, cos = angles.sin(), angles.cos()
+
+        pos_emb = torch.stack([sin, cos], dim=-1).flatten(-2)
+
+        return pos_emb
 
 
 class RoPE(nn.Module):
