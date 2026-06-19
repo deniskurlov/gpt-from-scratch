@@ -12,8 +12,14 @@ def test_model_shape_and_type(tok, text):
     d_model = 128
     n_heads = 4
     n_layers = 6
+    rope_base=10_000.0
+    d_ff=None
+    dropout=0.1
 
-    gpt = GPT(V=V, T_max=T_max, n_heads=n_heads, d_model=d_model, n_layers=n_layers)
+    gpt = GPT(
+        V=V, T_max=T_max, n_heads=n_heads, d_model=d_model, n_layers=n_layers,
+        rope_base=rope_base, d_ff=d_ff, dropout=dropout
+        )
     
     ds = TokenizedDataset(tok.encode_to_tensor(text))
     B, T = 2, 4
@@ -29,8 +35,14 @@ def test_model_return_logits_loss(tok, text, return_loss):
     d_model = 128
     n_heads = 4
     n_layers = 6
+    rope_base=10_000.0
+    d_ff=None
+    dropout=0.1
 
-    gpt = GPT(V=V, T_max=T_max, n_heads=n_heads, d_model=d_model, n_layers=n_layers)
+    gpt = GPT(
+        V=V, T_max=T_max, n_heads=n_heads, d_model=d_model, n_layers=n_layers,
+        rope_base=rope_base, d_ff=d_ff, dropout=dropout
+        )
     
     ds = TokenizedDataset(tok.encode_to_tensor(text))
     B, T = 2, 4
@@ -51,8 +63,14 @@ def test_model_initial_loss(tok, text):
     d_model = 128
     n_heads = 4
     n_layers = 6
+    rope_base=10_000.0
+    d_ff=None
+    dropout=0.1
 
-    gpt = GPT(V=V, T_max=T_max, n_heads=n_heads, d_model=d_model, n_layers=n_layers)
+    gpt = GPT(
+        V=V, T_max=T_max, n_heads=n_heads, d_model=d_model, n_layers=n_layers,
+        rope_base=rope_base, d_ff=d_ff, dropout=dropout
+        )
     
     ds = TokenizedDataset(tok.encode_to_tensor(text))
     B, T = 2, 4
@@ -69,12 +87,17 @@ def test_model_param_count(tok, d_ff, n_layers):
     T_max = 256
     d_model = 128
     n_heads = 4
-    
-    gpt = GPT(V=V, T_max=T_max, n_heads=n_heads, d_model=d_model,
-              n_layers=n_layers, d_ff=d_ff)
+    rope_base=10_000.0
+    dropout=0.1
+
+    gpt = GPT(
+        V=V, T_max=T_max, n_heads=n_heads, d_model=d_model, n_layers=n_layers,
+        rope_base=rope_base, d_ff=d_ff, dropout=dropout
+        )
     
     tok_emb_param_count = V * d_model
-    pos_emb_param_count = T_max * d_model
+    # pos_emb_param_count = T_max * d_model
+    pos_emb_param_count = 0  #  using RoPE -- no learned params
     attn_param_count = 4 * d_model ** 2 + 4 * d_model
     mlp_param_count = 2 * d_model * d_ff
     ln1_param_count = 2 * d_model
@@ -99,8 +122,14 @@ def test_model_causality(tok, text):
     d_model = 128
     n_heads = 4
     n_layers = 6
+    rope_base=10_000.0
+    d_ff=None
+    dropout=0.1
 
-    gpt = GPT(V=V, T_max=T_max, n_heads=n_heads, d_model=d_model, n_layers=n_layers)
+    gpt = GPT(
+        V=V, T_max=T_max, n_heads=n_heads, d_model=d_model, n_layers=n_layers,
+        rope_base=rope_base, d_ff=d_ff, dropout=dropout
+        )
     gpt.eval()  # prevent random dropouts 
 
     ds = TokenizedDataset(tok.encode_to_tensor(text))

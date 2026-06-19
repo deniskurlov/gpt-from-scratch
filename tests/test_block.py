@@ -7,35 +7,41 @@ from src.normalization import LayerNormalization
 
 
 def test_block_shape_and_type():
-    T_max, n_heads, d_model = 256, 4, 128
-    block = Block(T_max=T_max, n_heads=n_heads, d_model=d_model)
+    d_model, n_heads, rope_base = 256, 4, 10_000.0
+    block = Block(
+        n_heads=n_heads, d_model=d_model, rope_base=rope_base, d_ff=None, dropout=0.1
+        )
 
     B, T = 2, 4
     x = torch.randn(B, T, d_model)
-    x_out = block(x)
+    x_out, _ = block(x)
 
     assert x_out.shape == (B, T, d_model) and x_out.dtype == torch.float32
 
 def test_block_causality():
-    T_max, n_heads, d_model = 256, 4, 128
-    block = Block(T_max=T_max, n_heads=n_heads, d_model=d_model)
+    d_model, n_heads, rope_base = 256, 4, 10_000.0
+    block = Block(
+        n_heads=n_heads, d_model=d_model, rope_base=rope_base, d_ff=None, dropout=0.1
+        )
     block.eval()
 
     B, T = 2, 4
     x = torch.randn(B, T, d_model)
-    x_out = block(x)
+    x_out, _ = block(x)
 
     x_modified = x.clone()
     x_modified[:, -1, :] = 100 * torch.randn(B, d_model)
 
-    x_modified_out = block(x_modified)
+    x_modified_out, _ = block(x_modified)
 
     assert torch.equal(x_out[:, :T-1, :], x_modified_out[:, :T-1, :])
 
 def test_block_parameter_count():
-    T_max, n_heads, d_model = 256, 4, 128
+    d_model, n_heads, rope_base = 256, 4, 10_000.0
     d_ff = 6 * d_model
-    block = Block(T_max=T_max, n_heads=n_heads, d_model=d_model, d_ff=d_ff)
+    block = Block(
+        n_heads=n_heads, d_model=d_model, rope_base=rope_base, d_ff=d_ff, dropout=0.1
+        )
 
     ln1_param_count = 2 * d_model
     ln2_param_count = 2 * d_model
@@ -47,27 +53,31 @@ def test_block_parameter_count():
 
 def test_block_residual_structure_at_p0():
 
-    T_max, n_heads, d_model = 256, 4, 128
+    d_model, n_heads, rope_base = 256, 4, 10_000.0
     d_ff = 6 * d_model
-    block = Block(T_max=T_max, n_heads=n_heads, d_model=d_model, d_ff=d_ff, dropout=0.0)
+    block = Block(
+        n_heads=n_heads, d_model=d_model, rope_base=rope_base, d_ff=d_ff, dropout=0.0
+        )
 
     B, T = 2, 4
     x = torch.randn(B, T, d_model)
 
-    expected = x + block.attn(block.ln1(x))
+    expected = x + block.attn(block.ln1(x))[0]
     expected = expected + block.mlp(block.ln2(expected))
 
-    assert torch.allclose(block(x), expected)
+    assert torch.allclose(block(x)[0], expected)
 
 def test_block_dropout_train_vs_eval():
-    T_max, n_heads, d_model = 256, 4, 128
-    block = Block(T_max=T_max, n_heads=n_heads, d_model=d_model)
+    d_model, n_heads, rope_base = 256, 4, 10_000.0
+    block = Block(
+        n_heads=n_heads, d_model=d_model, rope_base=rope_base, d_ff=None, dropout=0.1
+        )
 
     B, T = 2, 4
     x = torch.randn(B, T, d_model)
 
     block.train()
-    assert not torch.allclose(block(x), block(x))
+    assert not torch.allclose(block(x)[0], block(x)[0])
 
     block.eval()
-    assert torch.allclose(block(x), block(x))
+    assert torch.allclose(block(x)[0], block(x)[0])

@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from src.data import TokenizedDataset
-from src.model import LearnedPositionalEmbedding, TokenEmbedding
+from src.embedding import LearnedPositionalEmbedding, TokenEmbedding
 
 
 def test_token_embedding_shape(tok, text):

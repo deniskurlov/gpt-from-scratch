@@ -14,12 +14,12 @@ def test_attn_shape_and_type():
 
 def test_mha_shape_and_type():
     torch.manual_seed(42)
-    T_max = 256
     B, T, d_model = 6, 10, 128
     n_heads = 4
+    rope_base = 10_000.0
     x = torch.randn(B, T, d_model)
-    attn = MultiHeadAttention(T_max=T_max, n_heads=n_heads, d_model=d_model)
-    out = attn(x)
+    attn = MultiHeadAttention(n_heads=n_heads, d_model=d_model, rope_base=rope_base)
+    out, _ = attn(x)
     assert out.shape == (B, T, d_model) and out.dtype == torch.float32
 
 def test_attn_qkv_parameter_count():
@@ -33,8 +33,8 @@ def test_attn_qkv_parameter_count():
 
 def test_mha_qkv_parameter_count():
     torch.manual_seed(42)
-    T_max, n_heads, d_model = 256, 4, 128
-    mha = MultiHeadAttention(T_max=T_max, n_heads=n_heads, d_model=d_model)
+    d_model, n_heads, rope_base = 256, 4, 10_000.0
+    mha = MultiHeadAttention(n_heads=n_heads, d_model=d_model, rope_base=rope_base)
     qkv = mha.qkv_proj
     assert sum(p.numel() for p in qkv.parameters()) == 3 * d_model * (d_model + 1)  
 
@@ -55,8 +55,8 @@ def test_attn_total_parameter_count():
 
 def test_mha_total_parameter_count():
     torch.manual_seed(42)
-    T_max, n_heads, d_model = 256, 4, 128
-    mha = MultiHeadAttention(T_max=T_max, n_heads=n_heads, d_model=d_model)
+    d_model, n_heads, rope_base = 256, 4, 10_000.0
+    mha = MultiHeadAttention(n_heads=n_heads, d_model=d_model, rope_base=rope_base)
     assert sum(p.numel() for p in mha.parameters()) == 4 * d_model * (d_model + 1)  
 
 def test_attn_causality():
@@ -75,15 +75,15 @@ def test_attn_causality():
 
 def test_mha_causality():
     torch.manual_seed(42)
-    T_max, n_heads, d_model = 256, 4, 128
-    mha = MultiHeadAttention(T_max=T_max, n_heads=n_heads, d_model=d_model)
+    d_model, n_heads, rope_base = 256, 4, 10_000.0
+    mha = MultiHeadAttention(n_heads=n_heads, d_model=d_model, rope_base=rope_base)
 
     B, T  = 6, 10
     x = torch.randn(B, T, d_model)
-    out = mha(x)
+    out, _ = mha(x)
     x_modified = x.clone()
     x_modified[:, T-1, :] = 100 * torch.randn(B, d_model) 
-    out_modified = mha(x_modified)
+    out_modified, _ = mha(x_modified)
 
     assert torch.equal(out[:, :T-1, :], out_modified[:, :T-1, :])
     
@@ -94,9 +94,3 @@ def test_attn_mask_is_non_parameter():
     d_v=d_model // 4
     attn = Attention(T_max=T_max, d_k=d_k, d_v=d_v, d_model=d_model)
     assert 'mask' in attn.state_dict() and not any(p is attn.mask for p in attn.parameters())
-
-def test_mha_mask_is_non_parameter():
-    torch.manual_seed(42)
-    T_max, n_heads, d_model = 256, 4, 128
-    mha = MultiHeadAttention(T_max=T_max, n_heads=n_heads, d_model=d_model)
-    assert 'mask' in mha.state_dict() and not any(p is mha.mask for p in mha.parameters())
