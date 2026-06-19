@@ -22,11 +22,11 @@ class Tokenizer:
     def decode(self, tokens: list[int]) -> str:
         return "".join([self.vocab[t] for t in tokens])
 
-    def encode_to_tensor(self, text: str) -> Int64[Tensor, "L"]:
+    def encode_to_tensor(self, text: str) -> Int64[Tensor, "L"]:  # noqa: F821
         return torch.tensor(self.encode(text), dtype=torch.long)
 
 class TokenizedDataset:
-    def __init__(self, encoded: Int64[Tensor, "L"]) -> None:
+    def __init__(self, encoded: Int64[Tensor, "L"]) -> None:  # noqa: F821
         self.encoded = encoded
 
     def get_batch(self, B: int, T: int) -> tuple[Int64[Tensor, "B T"], Int64[Tensor, "B T"]]:

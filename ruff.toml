@@ -1,0 +1,14 @@
+target-version = "py313"   # this project runs on Python 3.13
+
+[lint]
+# Ruff's default rule set is select = ["E4", "E7", "E9", "F"] (Pyflakes +
+# a slice of pycodestyle). We keep that default and only subtract from it.
+#
+# F722 = "syntax error in forward annotation". It only ever fires on jaxtyping
+# shape strings (e.g. Float32[Tensor, "B T d_model"]), which Ruff tries to parse
+# as forward-reference types. Pure false positives -> drop the rule globally.
+#
+# F821 ("undefined name") on single-token shapes like "L"/"T" is suppressed
+# inline with `# noqa: F821` at each site, so F821 stays active everywhere else
+# (notably the real one in src/model.py).
+ignore = ["F722"]

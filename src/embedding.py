@@ -19,7 +19,7 @@ class LearnedPositionalEmbedding(nn.Module):
         super().__init__()
         self.pos_emb = nn.Embedding(T_max, d_model)
 
-    def forward(self, positions: Int64[Tensor, "T"]) -> Float32[Tensor, "T d_model"]:
+    def forward(self, positions: Int64[Tensor, "T"]) -> Float32[Tensor, "T d_model"]:  # noqa: F821
         return self.pos_emb(positions)
 
 
@@ -30,7 +30,7 @@ class SinusoidalPositionalEmbedding(nn.Module):
         inv_freq = base ** (-2 * torch.arange(d_model // 2) / d_model)
         self.register_buffer('inv_freq', inv_freq, persistent=False)
 
-    def forward(self, positions: Int64[Tensor, "T"]) -> Float32[Tensor, "T d_model"]:
+    def forward(self, positions: Int64[Tensor, "T"]) -> Float32[Tensor, "T d_model"]:  # noqa: F821
         angles = torch.outer(positions, self.inv_freq)
         sin, cos = angles.sin(), angles.cos()
 

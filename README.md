@@ -37,7 +37,7 @@ reviews, hints. Never produces code that goes into the codebase.
 - Trains end-to-end, loss decreases, samples qualitatively resemble training data
 - I can derive the math behind every choice (√d, softmax, pre-norm, RoPE rotation, etc.)
 on paper, unprompted
-- Each module has a unit test (shape + non-NaN forward, gradient sanity check)
+- Each core module has a unit test (shape + non-NaN forward, gradient sanity check)
 - The full repo is mine — no copy-paste from nanoGPT, minGPT, HuggingFace, etc.
 
 ## Stack
@@ -57,10 +57,7 @@ device = torch.device("mps" if [torch.backends.mps.is](http://torch.backends.mps
 Environment:
 
 - `PYTORCH_ENABLE_MPS_FALLBACK=1` — lets unsupported ops fall back to CPU instead of crashing
-
 - Stay in fp32 for now (skip mixed precision)
-
 - Skip `torch.compile` (hit-or-miss on MPS, not needed at this scale)
-
 - Test tolerances: use `atol=1e-4` (MPS has ~1e-5 numerical drift vs CPU)
 
