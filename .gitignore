@@ -4,5 +4,6 @@ __pycache__/
 *.pyc
 data/
 .claude/sessions/
+.claude/settings.local.json
 checkpoints/
 logs/
