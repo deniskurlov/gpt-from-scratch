@@ -7,6 +7,7 @@ from src.data import load_corpus, Tokenizer
 def text():
     return load_corpus()
 
+
 @pytest.fixture(scope="module")
 def tok(text):
     return Tokenizer(text)

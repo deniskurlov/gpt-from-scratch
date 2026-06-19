@@ -12,6 +12,7 @@ class GPTConfig:
     d_ff: int | None = None
     dropout: float = 0.1
 
+
 @dataclass
 class TrainConfig:
     model: GPTConfig

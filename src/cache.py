@@ -4,7 +4,7 @@ from jaxtyping import Float32
 from torch import Tensor
 
 
-class KVCache():
+class KVCache:
     def __init__(self, max_size: int | None = None):
         self.K = None
         self.V = None
@@ -14,8 +14,8 @@ class KVCache():
     def append(
         self,
         k_new: Float32[Tensor, "B n_heads T_new head_dim"],
-        v_new: Float32[Tensor, "B n_heads T_new head_dim"]
-        ) -> None:
+        v_new: Float32[Tensor, "B n_heads T_new head_dim"],
+    ) -> None:
         T_new = k_new.shape[-2]
         if self.K is None:
             self.K = k_new
@@ -26,13 +26,15 @@ class KVCache():
         self.total_appended += T_new
 
         if self.max_size is not None and self.K.shape[-2] > self.max_size:
-            self.K = self.K[..., -self.max_size:, :]
-            self.V = self.V[..., -self.max_size:, :]
+            self.K = self.K[..., -self.max_size :, :]
+            self.V = self.V[..., -self.max_size :, :]
 
-    def get(self) -> tuple[
-            Float32[Tensor, "B n_heads T_cached head_dim"] | None,
-            Float32[Tensor, "B n_heads T_cached head_dim"] | None
-            ]:
+    def get(
+        self,
+    ) -> tuple[
+        Float32[Tensor, "B n_heads T_cached head_dim"] | None,
+        Float32[Tensor, "B n_heads T_cached head_dim"] | None,
+    ]:
         return (self.K, self.V)
 
     def __len__(self) -> int:
@@ -46,7 +48,7 @@ class KVCache():
         return self.total_appended - (self.K.shape[-2] if self.K is not None else 0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     cache = KVCache()
     assert len(cache) == 0
     cache.append(torch.zeros(1, 4, 3, 16), torch.zeros(1, 4, 3, 16))
